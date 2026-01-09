@@ -4,8 +4,11 @@ import re
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.filters import CommandStart, Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from src.llm import LLMClient
-from src.database import get_services_context
+from src.database import get_services_context, save_user, get_user, delete_user
+from src.prompts import set_mode, list_modes, get_current_mode
 
 router = Router()
 llm_client = LLMClient()
@@ -14,8 +17,18 @@ llm_client = LLMClient()
 user_histories = {}
 MAX_HISTORY = 4
 
-# Store known user contact info separately to persist it even if it drops out of LLM context window
-user_contacts = {}
+class FeedbackState(StatesGroup):
+    waiting_for_message = State()
+
+def get_main_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📱 Отправить контакт", request_contact=True)],
+            [KeyboardButton(text="❓ FAQ"), KeyboardButton(text="ℹ️ О нас")],
+            [KeyboardButton(text="👤 Мой профиль"), KeyboardButton(text="📩 Обратная связь")]
+        ],
+        resize_keyboard=True
+    )
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -25,17 +38,152 @@ async def cmd_start(message: Message):
     welcome_text = (
         "Привет! Я виртуальный секретарь разработчика.\n"
         "Я могу рассказать о наших услугах, сориентировать по ценам и принять заявку.\n"
-        "Спросите меня о чем-нибудь, например: 'Сколько стоит простой бот?'"
+        "Используйте кнопки меню для навигации или просто напишите ваш вопрос."
     )
 
-    # Request contact button
-    contact_kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📱 Отправить контакт", request_contact=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True
+    await message.answer(welcome_text, reply_markup=get_main_keyboard())
+
+@router.message(Command("help"))
+async def cmd_help(message: Message):
+    help_text = (
+        "🤖 **Список команд:**\n\n"
+        "/start - Перезапустить бота\n"
+        "/clear - Очистить историю диалога\n"
+        "/profile - Мой профиль\n"
+        "/feedback - Написать разработчику\n"
+        "/help - Показать это сообщение"
+    )
+    await message.answer(help_text, parse_mode="Markdown")
+
+@router.message(Command("clear"))
+async def cmd_clear(message: Message):
+    user_id = message.from_user.id
+    user_histories[user_id] = []
+    await message.answer("🧹 История диалога очищена.")
+
+@router.message(Command("profile"))
+async def cmd_profile(message: Message):
+    user_id = message.from_user.id
+    user_data = get_user(user_id)
+
+    if not user_data:
+        await message.answer("❌ У меня нет ваших сохраненных данных.")
+        return
+
+    profile_text = (
+        f"👤 **Ваш профиль:**\n"
+        f"Имя: {user_data.get('name')}\n"
+        f"Телефон: {user_data.get('phone')}"
     )
 
-    await message.answer(welcome_text, reply_markup=contact_kb)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Удалить мои данные", callback_data="delete_my_data")]
+    ])
+
+    await message.answer(profile_text, reply_markup=kb, parse_mode="Markdown")
+
+@router.callback_query(F.data == "delete_my_data")
+async def handle_delete_data(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    if delete_user(user_id):
+        await callback.message.edit_text("✅ Ваши данные были успешно удалены из базы.")
+    else:
+        await callback.message.edit_text("❌ Ошибка удаления или данные не найдены.")
+
+@router.message(F.text == "👤 Мой профиль")
+async def text_profile(message: Message):
+    await cmd_profile(message)
+
+@router.message(Command("admin"))
+async def cmd_admin(message: Message):
+    """Admin help command."""
+    await message.answer(
+        "🛠 **Панель администратора:**\n\n"
+        "/set_mode <mode> - Сменить режим бота\n"
+        "/modes - Список доступных режимов\n"
+        "/set_admin - Узнать ID чата для конфига"
+    )
+
+@router.message(Command("modes"))
+async def cmd_modes(message: Message):
+    modes = list_modes()
+    current = get_current_mode()
+    text = f"Текущий режим: **{current}**\n\nДоступные режимы:\n" + "\n".join([f"- {m}" for m in modes])
+    await message.answer(text, parse_mode="Markdown")
+
+@router.message(Command("set_mode"))
+async def cmd_set_mode(message: Message):
+    args = message.text.split()
+    if len(args) < 2:
+        await message.answer("Использование: /set_mode <mode_name>")
+        return
+
+    mode_name = args[1]
+    if set_mode(mode_name):
+        await message.answer(f"✅ Режим бота изменен на: **{mode_name}**", parse_mode="Markdown")
+    else:
+        await message.answer(f"❌ Режим `{mode_name}` не найден. Проверьте папку config/prompts.", parse_mode="Markdown")
+
+@router.message(F.text == "ℹ️ О нас")
+async def handle_about(message: Message):
+    about_text = (
+        "👨‍💻 **О нас**\n\n"
+        "Мы команда разработчиков, специализирующаяся на создании чат-ботов, веб-сервисов и автоматизации бизнеса.\n"
+        "Наш стек: Python, MongoDB, Docker, LLM (GPT/Llama)."
+    )
+    await message.answer(about_text, parse_mode="Markdown")
+
+# --- FAQ Handling ---
+@router.message(F.text == "❓ FAQ")
+async def handle_faq_button(message: Message):
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💰 Цены", callback_data="faq_prices")],
+        [InlineKeyboardButton(text="⏳ Сроки", callback_data="faq_timeline")],
+        [InlineKeyboardButton(text="📞 Контакты", callback_data="faq_contacts")]
+    ])
+    await message.answer("Выберите тему:", reply_markup=kb)
+
+@router.callback_query(F.data.startswith("faq_"))
+async def handle_faq_callback(callback: CallbackQuery):
+    topic = callback.data.split("_")[1]
+    text = ""
+    if topic == "prices":
+        text = "💰 **Цены:**\n- Простой бот: $100-$300\n- Сложный бот: от $500\n- Консультация: $50/час"
+    elif topic == "timeline":
+        text = "⏳ **Сроки:**\n- Простой бот: 3-5 дней\n- Сложный проект: 2+ недели"
+    elif topic == "contacts":
+        text = "📞 **Контакты:**\nПишите @Lotargo для обсуждения деталей."
+
+    await callback.message.edit_text(text, parse_mode="Markdown")
+    await callback.answer()
+
+# --- Feedback Handling ---
+@router.message(Command("feedback"))
+@router.message(F.text == "📩 Обратная связь")
+async def cmd_feedback(message: Message, state: FSMContext):
+    await message.answer("✍️ Напишите ваше сообщение, и я передам его администратору.")
+    await state.set_state(FeedbackState.waiting_for_message)
+
+@router.message(FeedbackState.waiting_for_message)
+async def process_feedback(message: Message, state: FSMContext, bot: Bot):
+    admin_group_id = os.getenv("ADMIN_GROUP_ID")
+    if not admin_group_id:
+        await message.answer("❌ Ошибка: Админ не настроен.")
+        await state.clear()
+        return
+
+    user_info = f"Feedback from: {message.from_user.full_name} (@{message.from_user.username})"
+    try:
+        await bot.send_message(
+            chat_id=admin_group_id,
+            text=f"📩 **Новое сообщение!**\n\n{user_info}\n\n{message.text}"
+        )
+        await message.answer("✅ Сообщение отправлено! Мы свяжемся с вами.")
+    except Exception as e:
+        print(f"Failed to send feedback: {e}")
+        await message.answer("❌ Ошибка отправки.")
+
+    await state.clear()
 
 @router.message(F.contact)
 async def handle_contact(message: Message):
@@ -43,24 +191,26 @@ async def handle_contact(message: Message):
     contact = message.contact
 
     # Persist contact info
-    user_contacts[user_id] = {
+    user_data = {
+        "user_id": user_id,
         "name": f"{contact.first_name} {contact.last_name or ''}".strip(),
         "phone": contact.phone_number
     }
+    save_user(user_id, user_data)
 
     # Initialize history if new
     if user_id not in user_histories:
         user_histories[user_id] = []
 
     # Inject contact info into the conversation history as a system note or user message
-    contact_info = f"My contact info: Name={user_contacts[user_id]['name']}, Phone={user_contacts[user_id]['phone']}"
+    contact_info = f"My contact info: Name={user_data['name']}, Phone={user_data['phone']}"
 
     # We add this as a 'user' message so the LLM sees the user provided it.
     user_histories[user_id].append({"role": "user", "content": f"[System: User shared contact card]\n{contact_info}"})
 
     await message.answer(
         "Спасибо! Я сохранил ваш контакт. Чем я могу вам помочь?",
-        reply_markup=ReplyKeyboardRemove()
+        reply_markup=get_main_keyboard()
     )
 
 @router.message(Command("set_admin"))
@@ -95,13 +245,14 @@ async def handle_message(message: Message):
 
     # Inject persistent contact info into LLM context if available (invisible to user, but visible to LLM)
     history_for_llm = list(user_histories[user_id])
-    if user_id in user_contacts:
+    user_data = get_user(user_id)
+    if user_data:
         # Prepend or append a system note ensuring the LLM knows the contact
         # Adding it as the first message in the history being sent effectively reminds the LLM
         contact_note = (
             f"[System Note: The user's verified contact details are:\n"
-            f"Name: {user_contacts[user_id]['name']}\n"
-            f"Phone: {user_contacts[user_id]['phone']}\n"
+            f"Name: {user_data.get('name')}\n"
+            f"Phone: {user_data.get('phone')}\n"
             f"Please use these details when filling out the booking form if needed.]"
         )
         # We insert it at the beginning of the history sent to LLM (after system prompt)
@@ -146,11 +297,12 @@ async def handle_message(message: Message):
         real_name = llm_name
         real_contact = llm_contact
 
-        if user_id in user_contacts:
+        user_data = get_user(user_id)
+        if user_data:
             if is_generic_name:
-                real_name = user_contacts[user_id]['name']
+                real_name = user_data.get('name', real_name)
             if is_generic_contact:
-                real_contact = user_contacts[user_id]['phone']
+                real_contact = user_data.get('phone', real_contact)
 
         # Format the summary for the card
         summary_content = (

@@ -2,7 +2,8 @@ import os
 import asyncio
 from openai import AsyncOpenAI
 from src.database import get_services_context
-from src.config import LLM_CONFIG, SYSTEM_PROMPT_TEMPLATE
+from src.config import LLM_CONFIG
+from src.prompts import load_prompt_template
 
 class LLMClient:
     def __init__(self):
@@ -13,20 +14,17 @@ class LLMClient:
         )
         self.model = provider_config.get("model", "llama-3.1-8b-instant")
         self.params = LLM_CONFIG.get("parameters", {"temperature": 0.6, "max_tokens": 1024, "top_p": 1.0})
-        self._system_prompt = None  # Lazy load
 
     def _get_system_prompt(self):
-        if self._system_prompt is None:
-            try:
-                services_text = get_services_context()
-            except Exception as e:
-                services_text = "Error fetching services. Please ask the developer to check the database."
-                print(f"Error fetching services context: {e}")
+        try:
+            services_text = get_services_context()
+        except Exception as e:
+            services_text = "Error fetching services. Please ask the developer to check the database."
+            print(f"Error fetching services context: {e}")
 
-            # Render the Jinja2 template
-            self._system_prompt = SYSTEM_PROMPT_TEMPLATE.render(services_context=services_text)
-
-        return self._system_prompt
+        # Load the current template dynamically
+        template = load_prompt_template()
+        return template.render(services_context=services_text)
 
     async def generate_response(self, history):
         """
