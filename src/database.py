@@ -53,6 +53,28 @@ def get_services_context():
 
     return text
 
+# --- User Management ---
+
+def save_user(user_id, data):
+    """Saves or updates user data in the 'users' collection."""
+    db = get_db()
+    db["users"].update_one(
+        {"user_id": user_id},
+        {"$set": data},
+        upsert=True
+    )
+
+def get_user(user_id):
+    """Retrieves user data by user_id. Returns None if not found."""
+    db = get_db()
+    return db["users"].find_one({"user_id": user_id})
+
+def delete_user(user_id):
+    """Deletes a user from the 'users' collection."""
+    db = get_db()
+    result = db["users"].delete_one({"user_id": user_id})
+    return result.deleted_count > 0
+
 if __name__ == "__main__":
     # Allow running this file directly to seed DB locally
     init_db()
