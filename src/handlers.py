@@ -14,6 +14,9 @@ llm_client = LLMClient()
 user_histories = {}
 MAX_HISTORY = 4
 
+# Store known user contact info separately to persist it even if it drops out of LLM context window
+user_contacts = {}
+
 @router.message(CommandStart())
 async def cmd_start(message: Message):
     user_id = message.from_user.id
@@ -39,12 +42,18 @@ async def handle_contact(message: Message):
     user_id = message.from_user.id
     contact = message.contact
 
+    # Persist contact info
+    user_contacts[user_id] = {
+        "name": f"{contact.first_name} {contact.last_name or ''}".strip(),
+        "phone": contact.phone_number
+    }
+
     # Initialize history if new
     if user_id not in user_histories:
         user_histories[user_id] = []
 
     # Inject contact info into the conversation history as a system note or user message
-    contact_info = f"My contact info: Name={contact.first_name}, Phone={contact.phone_number}"
+    contact_info = f"My contact info: Name={user_contacts[user_id]['name']}, Phone={user_contacts[user_id]['phone']}"
 
     # We add this as a 'user' message so the LLM sees the user provided it.
     user_histories[user_id].append({"role": "user", "content": f"[System: User shared contact card]\n{contact_info}"})
@@ -84,8 +93,26 @@ async def handle_message(message: Message):
     # Show typing status
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
+    # Inject persistent contact info into LLM context if available (invisible to user, but visible to LLM)
+    history_for_llm = list(user_histories[user_id])
+    if user_id in user_contacts:
+        # Prepend or append a system note ensuring the LLM knows the contact
+        # Adding it as the first message in the history being sent effectively reminds the LLM
+        contact_note = (
+            f"[System Note: The user's verified contact details are:\n"
+            f"Name: {user_contacts[user_id]['name']}\n"
+            f"Phone: {user_contacts[user_id]['phone']}\n"
+            f"Please use these details when filling out the booking form if needed.]"
+        )
+        # We insert it at the beginning of the history sent to LLM (after system prompt)
+        # Note: LLMClient.generate_response takes history. We can modify the history passed.
+        # However, `generate_response` prepends the system prompt.
+        # Let's just prepend it to the history list passed to the function.
+        history_for_llm.insert(0, {"role": "system", "content": contact_note})
+
+
     # Get LLM response
-    response_text = await llm_client.generate_response(user_histories[user_id])
+    response_text = await llm_client.generate_response(history_for_llm)
 
     # Try to parse JSON from the response
     booking_data = None
@@ -108,12 +135,29 @@ async def handle_message(message: Message):
         user_histories[user_id].append({"role": "assistant", "content": response_text})
 
     if booking_data:
+        # Fallback/Merge with known contact info if LLM missed it or returned placeholders
+        llm_name = booking_data.get('name', '')
+        llm_contact = booking_data.get('contact', '')
+
+        # Heuristic: if LLM returns "Unknown" or "Пользователь" or empty, override with known info
+        is_generic_name = not llm_name or llm_name.lower() in ['unknown', 'пользователь', 'user', 'unknown user']
+        is_generic_contact = not llm_contact or llm_contact.lower() in ['unknown', 'пользователь', 'user', 'unknown user']
+
+        real_name = llm_name
+        real_contact = llm_contact
+
+        if user_id in user_contacts:
+            if is_generic_name:
+                real_name = user_contacts[user_id]['name']
+            if is_generic_contact:
+                real_contact = user_contacts[user_id]['phone']
+
         # Format the summary for the card
         summary_content = (
-            f"Name: {booking_data.get('name', 'Unknown')}\n"
+            f"Name: {real_name}\n"
             f"Service: {booking_data.get('service', 'Unknown')}\n"
             f"Topic: {booking_data.get('topic', 'Unknown')}\n"
-            f"Contact: {booking_data.get('contact', 'Unknown')}"
+            f"Contact: {real_contact}"
         )
 
         # Create approval button
