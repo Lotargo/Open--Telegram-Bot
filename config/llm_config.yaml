@@ -1,0 +1,9 @@
+provider:
+  base_url: "https://api.groq.com/openai/v1"
+  model: "llama-3.1-8b-instant"
+  # API Key is loaded from env: GROQ_API_KEY
+
+parameters:
+  temperature: 0.6
+  max_tokens: 1024
+  top_p: 1.0
