@@ -9,9 +9,11 @@ from aiogram.fsm.state import State, StatesGroup
 from src.llm import LLMClient
 from src.database import get_services_context, save_user, get_user, delete_user
 from src.prompts import set_mode, list_modes, get_current_mode
+from src.audio import AudioClient
 
 router = Router()
 llm_client = LLMClient()
+audio_client = AudioClient()
 
 # In-memory history for MVP: {user_id: [{"role": "...", "content": "..."}]}
 user_histories = {}
@@ -132,6 +134,34 @@ async def handle_about(message: Message):
         "Наш стек: Python, MongoDB, Docker, LLM (GPT/Llama)."
     )
     await message.answer(about_text, parse_mode="Markdown")
+
+# --- Voice Handling ---
+@router.message(F.voice)
+async def handle_voice(message: Message, bot: Bot):
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+    file_id = message.voice.file_id
+    file = await bot.get_file(file_id)
+    file_path = file.file_path
+
+    # Download file locally
+    local_filename = f"voice_{file_id}.oga"
+    await bot.download_file(file_path, local_filename)
+
+    # Transcribe
+    text = await audio_client.transcribe(local_filename)
+
+    # Cleanup
+    if os.path.exists(local_filename):
+        os.remove(local_filename)
+
+    if text:
+        # Treat as text message
+        message.text = text
+        await message.answer(f"🎤 *Распознано:* \"{text}\"", parse_mode="Markdown")
+        await handle_message(message)
+    else:
+        await message.answer("😔 Не удалось распознать голосовое сообщение.")
 
 # --- FAQ Handling ---
 @router.message(F.text == "❓ FAQ")
