@@ -23,8 +23,8 @@ class LLMClient:
                 services_text = "Error fetching services. Please ask the developer to check the database."
                 print(f"Error fetching services context: {e}")
 
-            # Fill the template
-            self._system_prompt = SYSTEM_PROMPT_TEMPLATE.replace("{services_context}", services_text)
+            # Render the Jinja2 template
+            self._system_prompt = SYSTEM_PROMPT_TEMPLATE.render(services_context=services_text)
 
         return self._system_prompt
 
