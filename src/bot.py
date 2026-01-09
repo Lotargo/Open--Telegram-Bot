@@ -1,8 +1,12 @@
 import asyncio
 import os
 import logging
-from aiogram import Bot, Dispatcher
 from dotenv import load_dotenv
+
+# Load env vars before importing modules that might use them at module level (like src.handlers -> src.llm)
+load_dotenv()
+
+from aiogram import Bot, Dispatcher
 
 from src.handlers import router
 from src.middleware import RateLimitMiddleware
@@ -12,8 +16,6 @@ from src.database import init_db
 logging.basicConfig(level=logging.INFO)
 
 async def main():
-    load_dotenv()
-
     # Initialize DB (if running locally or ensure it's hit at startup)
     try:
         init_db()
