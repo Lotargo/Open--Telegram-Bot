@@ -259,10 +259,8 @@ async def cmd_set_admin(message: Message):
         f"Затем перезапустите бота."
     )
 
-@router.message(F.text)
-async def handle_message(message: Message):
+async def process_user_text(message: Message, user_text: str):
     user_id = message.from_user.id
-    user_text = message.text
 
     # Initialize history if new
     if user_id not in user_histories:
@@ -358,6 +356,10 @@ async def handle_message(message: Message):
             parse_mode="Markdown"
         )
         # Note: We don't append the summary card itself to history to avoid confusing the LLM with duplicate structured data
+
+@router.message(F.text)
+async def handle_message(message: Message):
+    await process_user_text(message, message.text)
 
 @router.callback_query(F.data == "approve_application")
 async def approve_application(callback: CallbackQuery, bot: Bot):
