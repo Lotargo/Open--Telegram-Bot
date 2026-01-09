@@ -162,9 +162,7 @@ async def handle_voice(message: Message, bot: Bot):
 
     if text:
         # Treat as text message
-        message.text = text
-        await message.answer(f"🎤 *Распознано:* \"{text}\"", parse_mode="Markdown")
-        await handle_message(message)
+        await process_user_text(message, text)
     else:
         await message.answer("😔 Не удалось распознать голосовое сообщение.")
 
