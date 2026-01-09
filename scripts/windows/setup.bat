@@ -10,7 +10,7 @@ echo === Portfolio Bot Setup (Windows) ===
 poetry --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo Poetry not found. Please install Poetry manually or via:
-    echo (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
+    echo "(Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -"
     pause
     exit /b 1
 )

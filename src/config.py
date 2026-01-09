@@ -8,14 +8,14 @@ def load_yaml(filename):
     path = os.path.join(CONFIG_DIR, filename)
     if not os.path.exists(path):
         raise FileNotFoundError(f"Config file not found: {path}")
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding='utf-8') as f:
         return yaml.safe_load(f)
 
 def load_template(filename):
     path = os.path.join(CONFIG_DIR, filename)
     if not os.path.exists(path):
         raise FileNotFoundError(f"Config file not found: {path}")
-    with open(path, 'r') as f:
+    with open(path, 'r', encoding='utf-8') as f:
         return Template(f.read())
 
 # Load configs once at module level
