@@ -1,18 +1,18 @@
 from aiogram import BaseMiddleware
 from aiogram.types import Message
 import time
+from src.config import BOT_CONFIG
 
 class RateLimitMiddleware(BaseMiddleware):
-    def __init__(self, limit: int = 2, window: int = 5):
+    def __init__(self, limit: int = None, window: int = None):
         """
-        limit: Max messages allowed
-        window: Time window in seconds
+        limit: Max messages allowed (defaults to config)
+        window: Time window in seconds (defaults to config)
         """
-        self.limit = limit
-        self.window = window
-        # Cache stores list of timestamps for each user_id
-        # We use a simple dict for MVP, but cachetools could handle expiry better if needed.
-        # Here we just manually prune.
+        rl_config = BOT_CONFIG.get("rate_limit", {})
+        self.limit = limit if limit is not None else rl_config.get("limit", 2)
+        self.window = window if window is not None else rl_config.get("window", 5)
+
         self.user_requests = {}
 
     async def __call__(
@@ -21,6 +21,10 @@ class RateLimitMiddleware(BaseMiddleware):
         event: Message,
         data: dict
     ):
+        # Only rate limit messages
+        if not isinstance(event, Message):
+             return await handler(event, data)
+
         user_id = event.from_user.id
         current_time = time.time()
 
@@ -32,8 +36,7 @@ class RateLimitMiddleware(BaseMiddleware):
         self.user_requests[user_id] = [t for t in self.user_requests[user_id] if current_time - t < self.window]
 
         if len(self.user_requests[user_id]) >= self.limit:
-            # Drop the request (or reply with a warning if desired, but dropping is safer for anti-spam)
-            # await event.answer("Слишком много запросов. Пожалуйста, подождите.")
+            # Drop the request
             return
 
         self.user_requests[user_id].append(current_time)

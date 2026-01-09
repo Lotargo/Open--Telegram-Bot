@@ -2,14 +2,17 @@ import os
 import asyncio
 from openai import AsyncOpenAI
 from src.database import get_services_context
+from src.config import LLM_CONFIG, SYSTEM_PROMPT_TEMPLATE
 
 class LLMClient:
     def __init__(self):
+        provider_config = LLM_CONFIG.get("provider", {})
         self.client = AsyncOpenAI(
-            base_url="https://api.groq.com/openai/v1",
+            base_url=provider_config.get("base_url", "https://api.groq.com/openai/v1"),
             api_key=os.getenv("GROQ_API_KEY")
         )
-        self.model = "llama-3.1-8b-instant"
+        self.model = provider_config.get("model", "llama-3.1-8b-instant")
+        self.params = LLM_CONFIG.get("parameters", {"temperature": 0.6, "max_tokens": 1024, "top_p": 1.0})
         self._system_prompt = None  # Lazy load
 
     def _get_system_prompt(self):
@@ -20,25 +23,9 @@ class LLMClient:
                 services_text = "Error fetching services. Please ask the developer to check the database."
                 print(f"Error fetching services context: {e}")
 
-            self._system_prompt = (
-                "You are a professional, polite, and efficient secretary for a Telegram Bot Developer.\n"
-                "Your goal is to answer questions about services, provide price ranges based strictly on the provided list, and gather requirements.\n"
-                "You DO NOT have the ability to execute code or perform actions yourself.\n\n"
-                f"{services_text}\n\n"
-                "GUIDELINES:\n"
-                "1. Be concise. Do not write long paragraphs.\n"
-                "2. Strictly adhere to the price ranges provided. If a user asks for something not listed or very complex, refer them to the developer: @Lotargo.\n"
-                "3. Do not invent services or prices.\n"
-                "4. If the user seems ready to order or has provided enough details (Name, Topic/Service, Contact/Username), you must ask them to confirm.\n"
-                "5. CRITICAL: When the user confirms they want to proceed and you have their details, you MUST end your message with a special block exactly like this:\n\n"
-                "SUMMARY_BLOCK:\n"
-                "Name: [User Name]\n"
-                "Service: [Service Name]\n"
-                "Topic: [Short Description]\n"
-                "Contact: [User Contact]\n"
-                "END_SUMMARY_BLOCK\n\n"
-                "This block will trigger a button for the user to approve the application."
-            )
+            # Fill the template
+            self._system_prompt = SYSTEM_PROMPT_TEMPLATE.replace("{services_context}", services_text)
+
         return self._system_prompt
 
     async def generate_response(self, history):
@@ -52,7 +39,9 @@ class LLMClient:
             chat_completion = await self.client.chat.completions.create(
                 messages=messages,
                 model=self.model,
-                temperature=0.6,
+                temperature=self.params.get("temperature", 0.6),
+                max_tokens=self.params.get("max_tokens", 1024),
+                top_p=self.params.get("top_p", 1.0)
             )
             return chat_completion.choices[0].message.content
         except Exception as e:
