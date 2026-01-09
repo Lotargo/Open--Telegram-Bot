@@ -15,6 +15,7 @@ services:
 
   mongo:
     image: mongo:latest
+    command: ["mongod", "--bind_ip_all"]
     volumes:
       - mongo_data:/data/db
     ports:

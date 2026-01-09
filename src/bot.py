@@ -37,7 +37,15 @@ async def main():
     dp.include_router(router)
 
     logging.info("Starting bot...")
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    except Exception as e:
+        logging.error(f"Polling error: {e}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Bot stopped by user.")
+    except Exception as e:
+        logging.exception(f"Unexpected error: {e}")
