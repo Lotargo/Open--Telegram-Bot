@@ -30,6 +30,11 @@ def init_db():
                 "name": "Консультация",
                 "price_range": "50$ / час",
                 "description": "Обсуждение архитектуры, ревью кода, помощь в ТЗ."
+            },
+            {
+                "name": "Сложный/Нестандартный проект",
+                "price_range": "По договоренности",
+                "description": "Для сложных задач и персональных решений. Свяжитесь с разработчиком: @Lotargo"
             }
         ]
         services_collection.insert_many(initial_services)

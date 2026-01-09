@@ -27,7 +27,7 @@ class LLMClient:
                 f"{services_text}\n\n"
                 "GUIDELINES:\n"
                 "1. Be concise. Do not write long paragraphs.\n"
-                "2. Strictly adhere to the price ranges provided. If a user asks for something not listed, suggest a Consultation or say you will pass the contact to the developer.\n"
+                "2. Strictly adhere to the price ranges provided. If a user asks for something not listed or very complex, refer them to the developer: @Lotargo.\n"
                 "3. Do not invent services or prices.\n"
                 "4. If the user seems ready to order or has provided enough details (Name, Topic/Service, Contact/Username), you must ask them to confirm.\n"
                 "5. CRITICAL: When the user confirms they want to proceed and you have their details, you MUST end your message with a special block exactly like this:\n\n"
