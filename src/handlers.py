@@ -115,6 +115,11 @@ async def cmd_modes(message: Message):
 
 @router.message(Command("set_mode"))
 async def cmd_set_mode(message: Message):
+    admin_group_id = os.getenv("ADMIN_GROUP_ID")
+    if str(message.chat.id) != str(admin_group_id):
+        await message.answer("🔒 Эта команда доступна только администратору.")
+        return
+
     args = message.text.split()
     if len(args) < 2:
         await message.answer("Использование: /set_mode <mode_name>")
