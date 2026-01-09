@@ -20,4 +20,5 @@ RUN poetry config virtualenvs.create false \
 # Copy the rest of the code
 COPY . .
 
-CMD ["python", "src/bot.py"]
+# Run as module to support absolute imports from src
+CMD ["python", "-m", "src.bot"]
