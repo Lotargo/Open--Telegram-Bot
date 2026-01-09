@@ -1,0 +1,41 @@
+import asyncio
+import os
+import logging
+from aiogram import Bot, Dispatcher
+from dotenv import load_dotenv
+
+from src.handlers import router
+from src.middleware import RateLimitMiddleware
+from src.database import init_db
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+
+async def main():
+    load_dotenv()
+
+    # Initialize DB (if running locally or ensure it's hit at startup)
+    try:
+        init_db()
+    except Exception as e:
+        logging.error(f"DB Init failed (might be expected if mongo container not ready yet): {e}")
+
+    bot_token = os.getenv("BOT_TOKEN")
+    if not bot_token or bot_token == "YOUR_TELEGRAM_BOT_TOKEN":
+        logging.error("BOT_TOKEN is not set in .env")
+        return
+
+    bot = Bot(token=bot_token)
+    dp = Dispatcher()
+
+    # Register Middleware
+    dp.message.middleware(RateLimitMiddleware(limit=2, window=3)) # 2 msgs per 3 secs
+
+    # Register Routers
+    dp.include_router(router)
+
+    logging.info("Starting bot...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())

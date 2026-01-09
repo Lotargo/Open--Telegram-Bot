@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    env_file:
+      - .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/portfolio_bot
+    depends_on:
+      - mongo
+    volumes:
+      - ./src:/app/src
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:latest
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
