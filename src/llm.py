@@ -15,22 +15,23 @@ class LLMClient:
         self.model = provider_config.get("model", "llama-3.1-8b-instant")
         self.params = LLM_CONFIG.get("parameters", {"temperature": 0.6, "max_tokens": 1024, "top_p": 1.0})
 
-    def _get_system_prompt(self):
+    def _get_system_prompt(self, user_id=None):
         try:
             services_text = get_services_context()
         except Exception as e:
             services_text = "Error fetching services. Please ask the developer to check the database."
             print(f"Error fetching services context: {e}")
 
-        # Load the current template dynamically
-        template = load_prompt_template()
+        # Load the current template dynamically, optionally personalized by user_id
+        template = load_prompt_template(user_id=user_id)
         return template.render(services_context=services_text)
 
-    async def generate_response(self, history):
+    async def generate_response(self, history, user_id=None):
         """
         history: list of dicts [{'role': 'user', 'content': '...'}, {'role': 'assistant', 'content': '...'}]
+        user_id: ID of the user to personalize the prompt for.
         """
-        system_prompt = self._get_system_prompt()
+        system_prompt = self._get_system_prompt(user_id=user_id)
         messages = [{"role": "system", "content": system_prompt}] + history
 
         try:
