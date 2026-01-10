@@ -2,7 +2,7 @@ import os
 import json
 import re
 from aiogram import Router, F, Bot
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, FSInputFile
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -161,8 +161,8 @@ async def handle_voice(message: Message, bot: Bot):
         os.remove(local_filename)
 
     if text:
-        # Treat as text message
-        await process_user_text(message, text)
+        # Treat as text message, explicitly flagging as voice input
+        await process_user_text(message, text, is_voice_input=True)
     else:
         await message.answer("😔 Не удалось распознать голосовое сообщение.")
 
@@ -257,7 +257,7 @@ async def cmd_set_admin(message: Message):
         f"Затем перезапустите бота."
     )
 
-async def process_user_text(message: Message, user_text: str):
+async def process_user_text(message: Message, user_text: str, is_voice_input: bool = False):
     user_id = message.from_user.id
 
     # Initialize history if new
@@ -314,6 +314,18 @@ async def process_user_text(message: Message, user_text: str):
     # Send the cleaned response text if there is any (and if it's not just the JSON)
     if response_text:
         await message.answer(response_text)
+
+        # If user sent voice, also reply with voice
+        if is_voice_input:
+            voice_filename = f"reply_{user_id}_{message.message_id}.ogg"
+            voice_path = await audio_client.text_to_speech(response_text, voice_filename)
+
+            if voice_path and os.path.exists(voice_path):
+                voice_file = FSInputFile(voice_path)
+                await message.answer_voice(voice_file)
+                # Cleanup
+                os.remove(voice_path)
+
         user_histories[user_id].append({"role": "assistant", "content": response_text})
 
     if booking_data:

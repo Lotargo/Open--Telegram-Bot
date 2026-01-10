@@ -2,6 +2,7 @@ import os
 from openai import AsyncOpenAI
 from src.config import LLM_CONFIG
 from pydub import AudioSegment
+import edge_tts
 
 class AudioClient:
     def __init__(self):
@@ -13,6 +14,36 @@ class AudioClient:
             api_key=os.getenv("GROQ_API_KEY")
         )
         self.model = LLM_CONFIG.get("stt", {}).get("model", "whisper-large-v3-turbo")
+        self.tts_voice = "ru-RU-SvetlanaNeural"
+
+    async def text_to_speech(self, text, output_filename):
+        """
+        Converts text to speech using Edge-TTS and saves it to output_filename.
+        Returns the path to the file to send (can be .ogg).
+        """
+        try:
+            # Edge-TTS output is typically MP3
+            temp_mp3 = output_filename + ".mp3"
+
+            communicate = edge_tts.Communicate(text, self.tts_voice)
+            await communicate.save(temp_mp3)
+
+            # Convert mp3 to ogg (opus) for Telegram voice message compatibility
+            final_path = output_filename
+            if not final_path.endswith(".ogg"):
+                final_path += ".ogg"
+
+            audio = AudioSegment.from_mp3(temp_mp3)
+            audio.export(final_path, format="ogg", codec="libopus")
+
+            # Clean up temp mp3
+            if os.path.exists(temp_mp3):
+                os.remove(temp_mp3)
+
+            return final_path
+        except Exception as e:
+            print(f"TTS Error: {e}")
+            return None
 
     async def transcribe(self, file_path):
         """
