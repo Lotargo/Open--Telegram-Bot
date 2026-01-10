@@ -8,5 +8,5 @@ stt:
 
 parameters:
   temperature: 0.6
-  max_tokens: 1024
+  max_tokens: 512
   top_p: 1.0

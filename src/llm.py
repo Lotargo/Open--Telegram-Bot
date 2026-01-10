@@ -13,7 +13,7 @@ class LLMClient:
             api_key=os.getenv("GROQ_API_KEY")
         )
         self.model = provider_config.get("model", "llama-3.1-8b-instant")
-        self.params = LLM_CONFIG.get("parameters", {"temperature": 0.6, "max_tokens": 1024, "top_p": 1.0})
+        self.params = LLM_CONFIG.get("parameters", {"temperature": 0.6, "max_tokens": 512, "top_p": 1.0})
 
     def _get_system_prompt(self, user_id=None):
         try:
@@ -28,8 +28,7 @@ class LLMClient:
 
     async def generate_response(self, history, user_id=None):
         """
-        history: list of dicts [{'role': 'user', 'content': '...'}, {'role': 'assistant', 'content': '...'}]
-        user_id: ID of the user to personalize the prompt for.
+        Non-streaming response generation.
         """
         system_prompt = self._get_system_prompt(user_id=user_id)
         messages = [{"role": "system", "content": system_prompt}] + history
@@ -39,13 +38,39 @@ class LLMClient:
                 messages=messages,
                 model=self.model,
                 temperature=self.params.get("temperature", 0.6),
-                max_tokens=self.params.get("max_tokens", 1024),
+                max_tokens=self.params.get("max_tokens", 512),
                 top_p=self.params.get("top_p", 1.0)
             )
             return chat_completion.choices[0].message.content
         except Exception as e:
             print(f"LLM Error: {e}")
             return "Извините, сейчас я не могу ответить. Пожалуйста, попробуйте позже."
+
+    async def generate_response_stream(self, history, user_id=None):
+        """
+        Streaming response generation. Yields chunks of text.
+        """
+        system_prompt = self._get_system_prompt(user_id=user_id)
+        messages = [{"role": "system", "content": system_prompt}] + history
+
+        try:
+            stream = await self.client.chat.completions.create(
+                messages=messages,
+                model=self.model,
+                temperature=self.params.get("temperature", 0.6),
+                max_tokens=self.params.get("max_tokens", 512),
+                top_p=self.params.get("top_p", 1.0),
+                stream=True
+            )
+
+            async for chunk in stream:
+                content = chunk.choices[0].delta.content
+                if content:
+                    yield content
+
+        except Exception as e:
+            print(f"LLM Stream Error: {e}")
+            yield "Извините, произошла ошибка. Пожалуйста, попробуйте позже."
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
@@ -54,10 +79,13 @@ if __name__ == "__main__":
     async def main():
         llm = LLMClient()
         history = [
-            {"role": "user", "content": "Привет, сколько стоит простой бот?"}
+            {"role": "user", "content": "Привет, расскажи сказку про робота."}
         ]
-        response = await llm.generate_response(history)
-        print("\nUser: Привет, сколько стоит простой бот?")
-        print("AI:", response)
+
+        print("\nUser: Привет, расскажи сказку про робота.")
+        print("AI: ", end="", flush=True)
+        async for chunk in llm.generate_response_stream(history):
+            print(chunk, end="", flush=True)
+        print("\n")
 
     asyncio.run(main())
