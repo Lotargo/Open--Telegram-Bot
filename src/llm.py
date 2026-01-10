@@ -46,32 +46,6 @@ class LLMClient:
             print(f"LLM Error: {e}")
             return "Извините, сейчас я не могу ответить. Пожалуйста, попробуйте позже."
 
-    async def generate_response_stream(self, history, user_id=None):
-        """
-        Streaming response generation. Yields chunks of text.
-        """
-        system_prompt = self._get_system_prompt(user_id=user_id)
-        messages = [{"role": "system", "content": system_prompt}] + history
-
-        try:
-            stream = await self.client.chat.completions.create(
-                messages=messages,
-                model=self.model,
-                temperature=self.params.get("temperature", 0.6),
-                max_tokens=self.params.get("max_tokens", 512),
-                top_p=self.params.get("top_p", 1.0),
-                stream=True
-            )
-
-            async for chunk in stream:
-                content = chunk.choices[0].delta.content
-                if content:
-                    yield content
-
-        except Exception as e:
-            print(f"LLM Stream Error: {e}")
-            yield "Извините, произошла ошибка. Пожалуйста, попробуйте позже."
-
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
@@ -83,9 +57,7 @@ if __name__ == "__main__":
         ]
 
         print("\nUser: Привет, расскажи сказку про робота.")
-        print("AI: ", end="", flush=True)
-        async for chunk in llm.generate_response_stream(history):
-            print(chunk, end="", flush=True)
-        print("\n")
+        response = await llm.generate_response(history)
+        print("AI:", response)
 
     asyncio.run(main())

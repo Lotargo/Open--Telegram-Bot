@@ -8,6 +8,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramRetryAfter
+from aiogram.utils.markdown import escape_md
 from src.llm import LLMClient
 from src.database import get_services_context, save_user, get_user, delete_user
 from src.prompts import set_mode, list_modes, get_current_mode, _get_or_create_user_persona
@@ -33,6 +34,15 @@ def get_main_keyboard():
         ],
         resize_keyboard=True
     )
+
+def strip_markdown(text):
+    """
+    Removes Markdown syntax characters to prevent rendering issues.
+    Removes: *, _, `, [, ]
+    """
+    # Simple regex to remove common markdown chars
+    # We want to keep text, just remove the formatting symbols
+    return re.sub(r"[\*\_`\[\]]", "", text)
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
@@ -249,19 +259,6 @@ async def handle_contact(message: Message):
     # Trigger LLM response immediately instead of static message
     await message.answer("✅ Контакт сохранен.", reply_markup=get_main_keyboard())
 
-    # We pass a dummy text to process_user_text, but we want it to react to the history we just appended.
-    # However, process_user_text appends the user_text to history.
-    # So we should call a variant or just manually call LLM.
-    # Reusing process_user_text with an empty string or special flag is cleaner if we refactor it.
-    # Let's refactor process_user_text to accept `add_to_history=False` or similar.
-
-    # BUT easier: Just call the inner logic of generating response.
-    # Let's call process_user_text with a special system prompt as "user_text" but that feels wrong.
-
-    # Best approach: Just call process_user_text with a "hidden" prompt that guides the LLM to respond to the contact sharing.
-    # Actually, since we already appended the [System: ...] message above, we can just call the LLM generation logic.
-    # To reuse the streaming logic, let's call process_user_text with None/Empty string and handle it there.
-
     await process_user_text(message, user_text="", skip_user_history=True)
 
 @router.message(Command("set_admin"))
@@ -305,68 +302,14 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
         )
         history_for_llm.insert(0, {"role": "system", "content": contact_note})
 
-    # --- STREAMING IMPLEMENTATION ---
+    # Get LLM response (NON-STREAMING REVERTED)
+    response_text = await llm_client.generate_response(history_for_llm, user_id=user_id)
 
-    # If it's voice input, we might want to generate full text first to do TTS.
-    # Or we can stream text and then do TTS. The user prioritized streaming for text display.
-    # Let's use streaming for visual text always.
+    # Post-processing (JSON parsing, Clean, TTS, History Update)
 
-    msg_entity = None
-    accumulated_text = ""
-
-    # Initial placeholder message
-    try:
-        msg_entity = await message.answer("...")
-    except Exception as e:
-        print(f"Error sending placeholder: {e}")
-        return
-
-    last_update_text = "..."
-
-    try:
-        async for chunk in llm_client.generate_response_stream(history_for_llm, user_id=user_id):
-            accumulated_text += chunk
-
-            # Update message every ~50 chars or similar heuristic to avoid API limits?
-            # Telegram handles frequent edits somewhat gracefully but throttling is safer.
-            # We'll rely on a simple length diff check for now or just update every chunk if chunks are big enough.
-            # Usually chunks are tokens. Let's update every 10 chars or so?
-            # A simple way is to check if accumulated_text is significantly different from last_update_text
-
-            if len(accumulated_text) - len(last_update_text) > 20:
-                try:
-                    await msg_entity.edit_text(accumulated_text) # Markdown is default? No, default is None/Text.
-                    # Wait, if we use Markdown in chunks, we might break syntax while streaming (e.g. "**Bo").
-                    # User suggested streaming fixes Markdown issues. Actually, streaming often BREAKS Markdown if incomplete tags are rendered.
-                    # But user said "Telegram isn't displaying MD markup... maybe because we don't use streaming".
-                    # Actually, raw markdown usually works if parsed correctly.
-                    # Let's try to parse_mode=None during stream, and Markdown at the end?
-                    # Or just stream plain text.
-                    last_update_text = accumulated_text
-                except TelegramRetryAfter as e:
-                    await asyncio.sleep(e.retry_after)
-                except Exception:
-                    pass
-
-        # Final update with full text and parsing
-        if accumulated_text != last_update_text:
-            try:
-                await msg_entity.edit_text(accumulated_text)
-            except Exception:
-                pass
-
-    except Exception as e:
-        print(f"Streaming failed: {e}")
-        # Fallback
-        if not accumulated_text:
-             await msg_entity.edit_text("Извините, произошла ошибка.")
-             return
-
-    response_text = accumulated_text
-
-    # --- END STREAMING ---
-
-    # Post-processing (JSON parsing, TTS, History Update)
+    # Store original response for history (LLM memory should include what it generated, including JSON)
+    # However, if we strip JSON from user view, LLM context has it, which is correct (LLM knows it confirmed).
+    user_histories[user_id].append({"role": "assistant", "content": response_text})
 
     # Try to parse JSON from the response
     booking_data = None
@@ -379,36 +322,45 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
             if data.get("booking_confirmed"):
                 booking_data = data
                 # Remove the JSON from the text displayed to the user
-                clean_text = response_text.replace(json_str, "").strip()
-                if clean_text != response_text:
-                    response_text = clean_text
-                    await msg_entity.edit_text(response_text)
+                # We update response_text here locally for display purposes
+                response_text = response_text.replace(json_str, "").strip()
     except Exception as e:
         print(f"JSON Parsing Error: {e}")
 
-    # Add to history
-    user_histories[user_id].append({"role": "assistant", "content": accumulated_text}) # Save original full response including JSON for context
+    # Strip Markdown from the user-facing text
+    clean_response_text = strip_markdown(response_text)
 
-    # Voice TTS handling
-    if is_voice_input:
-        # We already showed the text. Now send the voice note.
-        await message.bot.send_chat_action(chat_id=message.chat.id, action="record_voice")
+    # Send Text
+    if clean_response_text:
+        if is_voice_input:
+            # Voice flow: Voice first, then text
+             # Send "Recording voice..." action
+            await message.bot.send_chat_action(chat_id=message.chat.id, action="record_voice")
 
-        persona = _get_or_create_user_persona(user_id)
-        mood = persona.get("mood", "professional")
+            # Generate voice
+            persona = _get_or_create_user_persona(user_id)
+            mood = persona.get("mood", "professional")
 
-        voice_filename = f"reply_{user_id}_{message.message_id}.ogg"
-        # Use clean response_text for TTS
-        voice_path = await audio_client.text_to_speech(response_text, voice_filename, mood=mood)
+            voice_filename = f"reply_{user_id}_{message.message_id}.ogg"
+            # Use CLEAN text for TTS (no markdown, no JSON)
+            voice_path = await audio_client.text_to_speech(clean_response_text, voice_filename, mood=mood)
 
-        if voice_path and os.path.exists(voice_path):
-            voice_file = FSInputFile(voice_path)
-            try:
-                # Reply to the user's voice message, not our own text message
-                await message.reply_voice(voice_file)
-            except Exception as e:
-                print(f"Failed to send voice message: {e}")
-            os.remove(voice_path)
+            if voice_path and os.path.exists(voice_path):
+                voice_file = FSInputFile(voice_path)
+                try:
+                    await message.reply_voice(voice_file)
+                except Exception as e:
+                    print(f"Failed to send voice message: {e}")
+                os.remove(voice_path)
+
+                # Send text SECOND (caption/follow-up)
+                await message.answer(clean_response_text)
+            else:
+                # Fallback: TTS failed, send text only
+                await message.answer(clean_response_text)
+        else:
+            # Normal text flow
+            await message.answer(clean_response_text)
 
     # Booking Confirmation Card
     if booking_data:
@@ -428,11 +380,23 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
             if is_generic_contact:
                 real_contact = user_data.get('phone', real_contact)
 
+        # Escape user data to prevent Markdown errors in the system card
+        # AIogram's escape_md escapes chars for MarkdownV2, but parse_mode="Markdown" uses legacy.
+        # "Markdown" legacy only needs simple escaping or careful handling.
+        # But safest is usually to remove risky chars or use a function.
+        # AIogram 3 escape_md is for MarkdownV2.
+        # Let's just strip markdown chars from the variables to be safe/consistent with the bot style.
+        # Or simple replace.
+        real_name_safe = strip_markdown(real_name)
+        real_contact_safe = strip_markdown(real_contact)
+        service_safe = strip_markdown(booking_data.get('service', 'Unknown'))
+        topic_safe = strip_markdown(booking_data.get('topic', 'Unknown'))
+
         summary_content = (
-            f"Name: {real_name}\n"
-            f"Service: {booking_data.get('service', 'Unknown')}\n"
-            f"Topic: {booking_data.get('topic', 'Unknown')}\n"
-            f"Contact: {real_contact}"
+            f"Name: {real_name_safe}\n"
+            f"Service: {service_safe}\n"
+            f"Topic: {topic_safe}\n"
+            f"Contact: {real_contact_safe}"
         )
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
