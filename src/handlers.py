@@ -312,34 +312,35 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
 
     # Try to parse JSON from the response
     booking_data = None
-    try:
-        # Find JSON block using regex (matches { ... })
-        # We also want to optionally match wrapping markdown code blocks e.g. ```json ... ``` or just ``` ... ```
-        # Regex explanation:
-        # (?:```json\s*)?  -> non-capturing group, optionally matches ```json followed by whitespace
-        # (\{.*?\})        -> capture group 1: match { ... } non-greedy
-        # (?:\s*```)?      -> non-capturing group, optionally matches whitespace followed by ```
 
-        # Actually, simpler is: extract the JSON object first, then try to remove it and its potential wrappers from the text.
-        json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
+    # Check if a JSON block exists in the response
+    # Regex captures { ... } block across lines
+    json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
+
+    if json_match:
+        json_str = json_match.group(0)
+        try:
             data = json.loads(json_str)
-            if data.get("booking_confirmed"):
+            # Check for booking confirmation key (handle both snake_case and merged just in case)
+            if data.get("booking_confirmed") or data.get("bookingconfirmed"):
                 booking_data = data
+        except Exception as e:
+            print(f"JSON Parsing Error: {e}")
 
-                # Now remove the JSON and potential wrappers from the text
-                # 1. Remove the JSON string itself
-                clean_text = response_text.replace(json_str, "")
+        # ALWAYS remove the JSON block from the user-facing text if found,
+        # regardless of whether it's a valid booking or not, to prevent leakage.
 
-                # 2. Remove empty markdown code blocks that might be left behind (e.g. ```json \n ```)
-                # Regex to match ```json [whitespace] ``` or just ``` [whitespace] ```
-                clean_text = re.sub(r"```(?:json)?\s*```", "", clean_text, flags=re.IGNORECASE)
+        # 1. Remove the JSON string itself
+        clean_text = response_text.replace(json_str, "")
 
-                response_text = clean_text.strip()
+        # 2. Remove leftovers: Markdown code blocks and "json" labels
+        # Matches: ```json ... ```, ``` ... ```, or standalone "json" preceding the block
+        clean_text = re.sub(r"```(?:json)?\s*```", "", clean_text, flags=re.IGNORECASE)
 
-    except Exception as e:
-        print(f"JSON Parsing Error: {e}")
+        # 3. Remove standalone "json" word at the end of text (common if LLM outputs "Text... \n\n json \n {block}")
+        clean_text = re.sub(r"\bjson\s*$", "", clean_text, flags=re.IGNORECASE)
+
+        response_text = clean_text.strip()
 
     # Strip Markdown from the user-facing text
     clean_response_text = strip_markdown(response_text)
