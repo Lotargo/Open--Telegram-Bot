@@ -335,6 +335,21 @@ typing-extensions = ">=4.1.0,<5.0.0"
 dev = ["black", "isort", "mypy", "pylint", "types-tabulate"]
 
 [[package]]
+name = "emoji"
+version = "2.15.0"
+description = "Emoji for Python"
+optional = false
+python-versions = ">=3.8"
+groups = ["main"]
+files = [
+    {file = "emoji-2.15.0-py3-none-any.whl", hash = "sha256:205296793d66a89d88af4688fa57fd6496732eb48917a87175a023c8138995eb"},
+    {file = "emoji-2.15.0.tar.gz", hash = "sha256:eae4ab7d86456a70a00a985125a03263a5eac54cd55e51d7e184b1ed3b6757e4"},
+]
+
+[package.extras]
+dev = ["coverage", "pytest (>=7.4.4)"]
+
+[[package]]
 name = "frozenlist"
 version = "1.8.0"
 description = "A list-like structure which implements collections.abc.MutableSequence"
@@ -1692,4 +1707,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.15"
-content-hash = "a4565e77472bd877c50a31eb04b0c7432dea42cb1db98713d2c71ae01e5ae689"
+content-hash = "f24021eec06c9be34291ec6219986dfa459c33dceb66ff42e3f4fe837ccb4997"

@@ -8,7 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from src.llm import LLMClient
 from src.database import get_services_context, save_user, get_user, delete_user
-from src.prompts import set_mode, list_modes, get_current_mode
+from src.prompts import set_mode, list_modes, get_current_mode, _get_or_create_user_persona
 from src.audio import AudioClient
 
 router = Router()
@@ -318,8 +318,12 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
             await message.bot.send_chat_action(chat_id=message.chat.id, action="record_voice")
 
             # Generate voice
+            # Get persona mood for prosody
+            persona = _get_or_create_user_persona(user_id)
+            mood = persona.get("mood", "professional")
+
             voice_filename = f"reply_{user_id}_{message.message_id}.ogg"
-            voice_path = await audio_client.text_to_speech(response_text, voice_filename)
+            voice_path = await audio_client.text_to_speech(response_text, voice_filename, mood=mood)
 
             if voice_path and os.path.exists(voice_path):
                 # Send voice FIRST

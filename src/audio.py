@@ -4,14 +4,18 @@ from src.config import LLM_CONFIG
 from pydub import AudioSegment
 import edge_tts
 import re
+import emoji
 
 def clean_markdown_for_tts(text: str) -> str:
     """
-    Removes Markdown formatting from text for cleaner TTS output.
+    Removes Markdown formatting and Emojis from text for cleaner TTS output.
     Keeps only the human-readable content.
     """
     if not text:
         return ""
+
+    # Remove Emojis
+    text = emoji.replace_emoji(text, replace='')
 
     # Remove bold/italic (**text**, *text*, __text__, _text_)
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
@@ -47,10 +51,15 @@ class AudioClient:
         self.model = LLM_CONFIG.get("stt", {}).get("model", "whisper-large-v3-turbo")
         self.tts_voice = "ru-RU-SvetlanaNeural"
 
-    async def text_to_speech(self, text, output_filename):
+    async def text_to_speech(self, text, output_filename, mood="professional"):
         """
         Converts text to speech using Edge-TTS and saves it to output_filename.
         Returns the path to the file to send (can be .ogg).
+
+        mood: affects rate and pitch
+          - enthusiastic: rate=+10%, pitch=+5Hz
+          - cynical/professional: rate=-5%, pitch=-2Hz
+          - default: no change
         """
         try:
             # Clean text before sending to TTS
@@ -61,7 +70,18 @@ class AudioClient:
             # Edge-TTS output is typically MP3
             temp_mp3 = output_filename + ".mp3"
 
-            communicate = edge_tts.Communicate(clean_text, self.tts_voice)
+            # Determine prosody options based on mood
+            rate = "+0%"
+            pitch = "+0Hz"
+
+            if mood == "enthusiastic":
+                rate = "+10%"
+                pitch = "+5Hz"
+            elif mood in ["cynical", "professional"]:
+                rate = "-5%"
+                pitch = "-2Hz"
+
+            communicate = edge_tts.Communicate(clean_text, self.tts_voice, rate=rate, pitch=pitch)
             await communicate.save(temp_mp3)
 
             # Convert mp3 to ogg (opus) for Telegram voice message compatibility
