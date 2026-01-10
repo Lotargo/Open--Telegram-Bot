@@ -322,7 +322,22 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
         try:
             data = json.loads(json_str)
             # Check for booking confirmation key (handle both snake_case and merged just in case)
-            if data.get("booking_confirmed") or data.get("bookingconfirmed"):
+            # Strict Boolean Check: value must be True (bool) or "true" (string case-insensitive)
+            # We explicitly reject False/"false".
+            is_confirmed = False
+
+            # Helper to check if value is 'true-ish'
+            def is_true(val):
+                if isinstance(val, bool):
+                    return val
+                if isinstance(val, str):
+                    return val.lower() == "true"
+                return False
+
+            if is_true(data.get("booking_confirmed")) or is_true(data.get("bookingconfirmed")):
+                is_confirmed = True
+
+            if is_confirmed:
                 booking_data = data
         except Exception as e:
             print(f"JSON Parsing Error: {e}")
