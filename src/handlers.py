@@ -17,7 +17,7 @@ audio_client = AudioClient()
 
 # In-memory history for MVP: {user_id: [{"role": "...", "content": "..."}]}
 user_histories = {}
-MAX_HISTORY = 4
+MAX_HISTORY = 25
 
 class FeedbackState(StatesGroup):
     waiting_for_message = State()
@@ -293,8 +293,8 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
         history_for_llm.insert(0, {"role": "system", "content": contact_note})
 
 
-    # Get LLM response
-    response_text = await llm_client.generate_response(history_for_llm)
+    # Get LLM response, passing user_id for persona generation
+    response_text = await llm_client.generate_response(history_for_llm, user_id=user_id)
 
     # Try to parse JSON from the response
     booking_data = None
