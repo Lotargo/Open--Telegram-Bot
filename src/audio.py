@@ -3,6 +3,37 @@ from openai import AsyncOpenAI
 from src.config import LLM_CONFIG
 from pydub import AudioSegment
 import edge_tts
+import re
+
+def clean_markdown_for_tts(text: str) -> str:
+    """
+    Removes Markdown formatting from text for cleaner TTS output.
+    Keeps only the human-readable content.
+    """
+    if not text:
+        return ""
+
+    # Remove bold/italic (**text**, *text*, __text__, _text_)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)
+    text = re.sub(r'__([^_]+)__', r'\1', text)
+    text = re.sub(r'_([^_]+)_', r'\1', text)
+
+    # Remove code blocks (```code```) and inline code (`code`)
+    text = re.sub(r'```[\s\S]*?```', '', text) # Remove code blocks entirely or keep content? usually best to remove or simplify
+    text = re.sub(r'`([^`]+)`', r'\1', text)
+
+    # Remove links [text](url) -> text
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+
+    # Remove headers (# Header)
+    text = re.sub(r'#+\s?', '', text)
+
+    # Remove lists markers (-, *, 1.)
+    text = re.sub(r'^\s*[-*]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
+
+    return text.strip()
 
 class AudioClient:
     def __init__(self):
@@ -22,10 +53,15 @@ class AudioClient:
         Returns the path to the file to send (can be .ogg).
         """
         try:
+            # Clean text before sending to TTS
+            clean_text = clean_markdown_for_tts(text)
+            if not clean_text:
+                return None
+
             # Edge-TTS output is typically MP3
             temp_mp3 = output_filename + ".mp3"
 
-            communicate = edge_tts.Communicate(text, self.tts_voice)
+            communicate = edge_tts.Communicate(clean_text, self.tts_voice)
             await communicate.save(temp_mp3)
 
             # Convert mp3 to ogg (opus) for Telegram voice message compatibility
