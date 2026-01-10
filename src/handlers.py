@@ -8,7 +8,6 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramRetryAfter
-from aiogram.utils.markdown import escape_md
 from src.llm import LLMClient
 from src.database import get_services_context, save_user, get_user, delete_user
 from src.prompts import set_mode, list_modes, get_current_mode, _get_or_create_user_persona
@@ -315,15 +314,30 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
     booking_data = None
     try:
         # Find JSON block using regex (matches { ... })
+        # We also want to optionally match wrapping markdown code blocks e.g. ```json ... ``` or just ``` ... ```
+        # Regex explanation:
+        # (?:```json\s*)?  -> non-capturing group, optionally matches ```json followed by whitespace
+        # (\{.*?\})        -> capture group 1: match { ... } non-greedy
+        # (?:\s*```)?      -> non-capturing group, optionally matches whitespace followed by ```
+
+        # Actually, simpler is: extract the JSON object first, then try to remove it and its potential wrappers from the text.
         json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
         if json_match:
             json_str = json_match.group(0)
             data = json.loads(json_str)
             if data.get("booking_confirmed"):
                 booking_data = data
-                # Remove the JSON from the text displayed to the user
-                # We update response_text here locally for display purposes
-                response_text = response_text.replace(json_str, "").strip()
+
+                # Now remove the JSON and potential wrappers from the text
+                # 1. Remove the JSON string itself
+                clean_text = response_text.replace(json_str, "")
+
+                # 2. Remove empty markdown code blocks that might be left behind (e.g. ```json \n ```)
+                # Regex to match ```json [whitespace] ``` or just ``` [whitespace] ```
+                clean_text = re.sub(r"```(?:json)?\s*```", "", clean_text, flags=re.IGNORECASE)
+
+                response_text = clean_text.strip()
+
     except Exception as e:
         print(f"JSON Parsing Error: {e}")
 
