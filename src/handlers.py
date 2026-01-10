@@ -324,7 +324,10 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
             if voice_path and os.path.exists(voice_path):
                 # Send voice FIRST
                 voice_file = FSInputFile(voice_path)
-                await message.answer_voice(voice_file)
+                try:
+                    await message.answer_voice(voice_file)
+                except Exception as e:
+                    print(f"Failed to send voice message: {e}")
                 # Cleanup
                 os.remove(voice_path)
 

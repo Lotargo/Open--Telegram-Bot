@@ -69,8 +69,13 @@ class AudioClient:
             if not final_path.endswith(".ogg"):
                 final_path += ".ogg"
 
-            audio = AudioSegment.from_mp3(temp_mp3)
-            audio.export(final_path, format="ogg", codec="libopus")
+            # Run blocking audio conversion in a separate thread
+            import asyncio
+            def _convert():
+                audio = AudioSegment.from_mp3(temp_mp3)
+                audio.export(final_path, format="ogg", codec="libopus")
+
+            await asyncio.to_thread(_convert)
 
             # Clean up temp mp3
             if os.path.exists(temp_mp3):
