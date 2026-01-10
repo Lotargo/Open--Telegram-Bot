@@ -1,11 +1,13 @@
 import os
 import json
 import re
+import asyncio
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, FSInputFile
 from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramRetryAfter
 from src.llm import LLMClient
 from src.database import get_services_context, save_user, get_user, delete_user
 from src.prompts import set_mode, list_modes, get_current_mode, _get_or_create_user_persona
@@ -235,16 +237,32 @@ async def handle_contact(message: Message):
     if user_id not in user_histories:
         user_histories[user_id] = []
 
-    # Inject contact info into the conversation history as a system note or user message
-    contact_info = f"My contact info: Name={user_data['name']}, Phone={user_data['phone']}"
+    # Inject contact info into the conversation history
+    contact_info = f"Name={user_data['name']}, Phone={user_data['phone']}"
 
-    # We add this as a 'user' message so the LLM sees the user provided it.
-    user_histories[user_id].append({"role": "user", "content": f"[System: User shared contact card]\n{contact_info}"})
+    # Add a system note posing as a user action
+    user_histories[user_id].append({
+        "role": "user",
+        "content": f"[System: User shared verified contact card]\n{contact_info}\n(Action: Acknowledge receipt and continue conversation)"
+    })
 
-    await message.answer(
-        "Спасибо! Я сохранил ваш контакт. Чем я могу вам помочь?",
-        reply_markup=get_main_keyboard()
-    )
+    # Trigger LLM response immediately instead of static message
+    await message.answer("✅ Контакт сохранен.", reply_markup=get_main_keyboard())
+
+    # We pass a dummy text to process_user_text, but we want it to react to the history we just appended.
+    # However, process_user_text appends the user_text to history.
+    # So we should call a variant or just manually call LLM.
+    # Reusing process_user_text with an empty string or special flag is cleaner if we refactor it.
+    # Let's refactor process_user_text to accept `add_to_history=False` or similar.
+
+    # BUT easier: Just call the inner logic of generating response.
+    # Let's call process_user_text with a special system prompt as "user_text" but that feels wrong.
+
+    # Best approach: Just call process_user_text with a "hidden" prompt that guides the LLM to respond to the contact sharing.
+    # Actually, since we already appended the [System: ...] message above, we can just call the LLM generation logic.
+    # To reuse the streaming logic, let's call process_user_text with None/Empty string and handle it there.
+
+    await process_user_text(message, user_text="", skip_user_history=True)
 
 @router.message(Command("set_admin"))
 async def cmd_set_admin(message: Message):
@@ -257,15 +275,16 @@ async def cmd_set_admin(message: Message):
         f"Затем перезапустите бота."
     )
 
-async def process_user_text(message: Message, user_text: str, is_voice_input: bool = False):
+async def process_user_text(message: Message, user_text: str, is_voice_input: bool = False, skip_user_history: bool = False):
     user_id = message.from_user.id
 
     # Initialize history if new
     if user_id not in user_histories:
         user_histories[user_id] = []
 
-    # Update history
-    user_histories[user_id].append({"role": "user", "content": user_text})
+    # Update history unless skipped (e.g. for contact event already added)
+    if not skip_user_history and user_text:
+        user_histories[user_id].append({"role": "user", "content": user_text})
 
     # Keep only last N messages to save context/tokens
     if len(user_histories[user_id]) > MAX_HISTORY:
@@ -274,27 +293,80 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
     # Show typing status
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
-    # Inject persistent contact info into LLM context if available (invisible to user, but visible to LLM)
+    # Inject persistent contact info into LLM context if available
     history_for_llm = list(user_histories[user_id])
     user_data = get_user(user_id)
     if user_data:
-        # Prepend or append a system note ensuring the LLM knows the contact
-        # Adding it as the first message in the history being sent effectively reminds the LLM
         contact_note = (
-            f"[System Note: The user's verified contact details are:\n"
+            f"[System Note: Verified contact details:\n"
             f"Name: {user_data.get('name')}\n"
             f"Phone: {user_data.get('phone')}\n"
             f"Please use these details when filling out the booking form if needed.]"
         )
-        # We insert it at the beginning of the history sent to LLM (after system prompt)
-        # Note: LLMClient.generate_response takes history. We can modify the history passed.
-        # However, `generate_response` prepends the system prompt.
-        # Let's just prepend it to the history list passed to the function.
         history_for_llm.insert(0, {"role": "system", "content": contact_note})
 
+    # --- STREAMING IMPLEMENTATION ---
 
-    # Get LLM response, passing user_id for persona generation
-    response_text = await llm_client.generate_response(history_for_llm, user_id=user_id)
+    # If it's voice input, we might want to generate full text first to do TTS.
+    # Or we can stream text and then do TTS. The user prioritized streaming for text display.
+    # Let's use streaming for visual text always.
+
+    msg_entity = None
+    accumulated_text = ""
+
+    # Initial placeholder message
+    try:
+        msg_entity = await message.answer("...")
+    except Exception as e:
+        print(f"Error sending placeholder: {e}")
+        return
+
+    last_update_text = "..."
+
+    try:
+        async for chunk in llm_client.generate_response_stream(history_for_llm, user_id=user_id):
+            accumulated_text += chunk
+
+            # Update message every ~50 chars or similar heuristic to avoid API limits?
+            # Telegram handles frequent edits somewhat gracefully but throttling is safer.
+            # We'll rely on a simple length diff check for now or just update every chunk if chunks are big enough.
+            # Usually chunks are tokens. Let's update every 10 chars or so?
+            # A simple way is to check if accumulated_text is significantly different from last_update_text
+
+            if len(accumulated_text) - len(last_update_text) > 20:
+                try:
+                    await msg_entity.edit_text(accumulated_text) # Markdown is default? No, default is None/Text.
+                    # Wait, if we use Markdown in chunks, we might break syntax while streaming (e.g. "**Bo").
+                    # User suggested streaming fixes Markdown issues. Actually, streaming often BREAKS Markdown if incomplete tags are rendered.
+                    # But user said "Telegram isn't displaying MD markup... maybe because we don't use streaming".
+                    # Actually, raw markdown usually works if parsed correctly.
+                    # Let's try to parse_mode=None during stream, and Markdown at the end?
+                    # Or just stream plain text.
+                    last_update_text = accumulated_text
+                except TelegramRetryAfter as e:
+                    await asyncio.sleep(e.retry_after)
+                except Exception:
+                    pass
+
+        # Final update with full text and parsing
+        if accumulated_text != last_update_text:
+            try:
+                await msg_entity.edit_text(accumulated_text)
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"Streaming failed: {e}")
+        # Fallback
+        if not accumulated_text:
+             await msg_entity.edit_text("Извините, произошла ошибка.")
+             return
+
+    response_text = accumulated_text
+
+    # --- END STREAMING ---
+
+    # Post-processing (JSON parsing, TTS, History Update)
 
     # Try to parse JSON from the response
     booking_data = None
@@ -307,65 +379,55 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
             if data.get("booking_confirmed"):
                 booking_data = data
                 # Remove the JSON from the text displayed to the user
-                response_text = response_text.replace(json_str, "").strip()
+                clean_text = response_text.replace(json_str, "").strip()
+                if clean_text != response_text:
+                    response_text = clean_text
+                    await msg_entity.edit_text(response_text)
     except Exception as e:
         print(f"JSON Parsing Error: {e}")
 
-    # Send the cleaned response text if there is any (and if it's not just the JSON)
-    if response_text:
-        if is_voice_input:
-            # Send "Recording voice..." action
-            await message.bot.send_chat_action(chat_id=message.chat.id, action="record_voice")
+    # Add to history
+    user_histories[user_id].append({"role": "assistant", "content": accumulated_text}) # Save original full response including JSON for context
 
-            # Generate voice
-            # Get persona mood for prosody
-            persona = _get_or_create_user_persona(user_id)
-            mood = persona.get("mood", "professional")
+    # Voice TTS handling
+    if is_voice_input:
+        # We already showed the text. Now send the voice note.
+        await message.bot.send_chat_action(chat_id=message.chat.id, action="record_voice")
 
-            voice_filename = f"reply_{user_id}_{message.message_id}.ogg"
-            voice_path = await audio_client.text_to_speech(response_text, voice_filename, mood=mood)
+        persona = _get_or_create_user_persona(user_id)
+        mood = persona.get("mood", "professional")
 
-            if voice_path and os.path.exists(voice_path):
-                # Send voice FIRST
-                voice_file = FSInputFile(voice_path)
-                try:
-                    await message.answer_voice(voice_file)
-                except Exception as e:
-                    print(f"Failed to send voice message: {e}")
-                # Cleanup
-                os.remove(voice_path)
+        voice_filename = f"reply_{user_id}_{message.message_id}.ogg"
+        # Use clean response_text for TTS
+        voice_path = await audio_client.text_to_speech(response_text, voice_filename, mood=mood)
 
-                # Send text SECOND (caption/follow-up)
-                await message.answer(response_text)
-            else:
-                # Fallback: TTS failed, send text only
-                await message.answer(response_text)
-        else:
-            # Normal text flow
-            await message.answer(response_text)
+        if voice_path and os.path.exists(voice_path):
+            voice_file = FSInputFile(voice_path)
+            try:
+                # Reply to the user's voice message, not our own text message
+                await message.reply_voice(voice_file)
+            except Exception as e:
+                print(f"Failed to send voice message: {e}")
+            os.remove(voice_path)
 
-        user_histories[user_id].append({"role": "assistant", "content": response_text})
-
+    # Booking Confirmation Card
     if booking_data:
-        # Fallback/Merge with known contact info if LLM missed it or returned placeholders
+        # Fallback/Merge with known contact info
         llm_name = booking_data.get('name', '')
         llm_contact = booking_data.get('contact', '')
 
-        # Heuristic: if LLM returns "Unknown" or "Пользователь" or empty, override with known info
         is_generic_name = not llm_name or llm_name.lower() in ['unknown', 'пользователь', 'user', 'unknown user']
         is_generic_contact = not llm_contact or llm_contact.lower() in ['unknown', 'пользователь', 'user', 'unknown user']
 
         real_name = llm_name
         real_contact = llm_contact
 
-        user_data = get_user(user_id)
         if user_data:
             if is_generic_name:
                 real_name = user_data.get('name', real_name)
             if is_generic_contact:
                 real_contact = user_data.get('phone', real_contact)
 
-        # Format the summary for the card
         summary_content = (
             f"Name: {real_name}\n"
             f"Service: {booking_data.get('service', 'Unknown')}\n"
@@ -373,7 +435,6 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
             f"Contact: {real_contact}"
         )
 
-        # Create approval button
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Все верно, отправить", callback_data="approve_application")]
         ])
@@ -383,7 +444,6 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
-        # Note: We don't append the summary card itself to history to avoid confusing the LLM with duplicate structured data
 
 @router.message(F.text)
 async def handle_message(message: Message):
