@@ -313,18 +313,29 @@ async def process_user_text(message: Message, user_text: str, is_voice_input: bo
 
     # Send the cleaned response text if there is any (and if it's not just the JSON)
     if response_text:
-        await message.answer(response_text)
-
-        # If user sent voice, also reply with voice
         if is_voice_input:
+            # Send "Recording voice..." action
+            await message.bot.send_chat_action(chat_id=message.chat.id, action="record_voice")
+
+            # Generate voice
             voice_filename = f"reply_{user_id}_{message.message_id}.ogg"
             voice_path = await audio_client.text_to_speech(response_text, voice_filename)
 
             if voice_path and os.path.exists(voice_path):
+                # Send voice FIRST
                 voice_file = FSInputFile(voice_path)
                 await message.answer_voice(voice_file)
                 # Cleanup
                 os.remove(voice_path)
+
+                # Send text SECOND (caption/follow-up)
+                await message.answer(response_text)
+            else:
+                # Fallback: TTS failed, send text only
+                await message.answer(response_text)
+        else:
+            # Normal text flow
+            await message.answer(response_text)
 
         user_histories[user_id].append({"role": "assistant", "content": response_text})
 
