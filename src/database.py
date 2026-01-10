@@ -14,42 +14,51 @@ def init_db():
     services_collection = db["services"]
 
     # Check if we already have services, if not, seed them
-    if services_collection.count_documents({}) == 0:
-        initial_services = [
-            {
-                "name": "Разработка Telegram бота (Базовый)",
-                "price_range": "100$ - 300$",
-                "description": "Простой бот: ответы на вопросы, кнопки, простая логика."
-            },
-            {
-                "name": "Разработка Telegram бота (Продвинутый)",
-                "price_range": "500$ - 1500$",
-                "description": "Интеграции с API, базами данных, платежными системами, LLM."
-            },
-            {
-                "name": "Консультация",
-                "price_range": "50$ / час",
-                "description": "Обсуждение архитектуры, ревью кода, помощь в ТЗ."
-            },
-            {
-                "name": "Сложный/Нестандартный проект",
-                "price_range": "По договоренности",
-                "description": "Для сложных задач и персональных решений. Свяжитесь с разработчиком: @Lotargo"
-            }
-        ]
-        services_collection.insert_many(initial_services)
-        print("Database initialized with default services.")
-    else:
-        print("Database already contains services.")
+    # Note: To update services, we might need to drop collection or update logic.
+    # For now, we will clear and re-insert to reflect the new pricing policy.
+    services_collection.delete_many({}) # Reset services to update to new pricing
+
+    initial_services = [
+        {
+            "name": "Простые боты (автоответчики, скрипты)",
+            "price_range": "от 1 500 руб.",
+            "description": "Базовая автоматизация, ответы на вопросы, меню. Идеально для старта."
+        },
+        {
+            "name": "AI-Ассистенты",
+            "price_range": "6 000 - 10 000 руб. (в среднем)",
+            "description": "Умные боты с LLM (как этот). Гибкие ответы, интеграция с AI."
+        },
+        {
+            "name": "Web Apps / Сложные интеграции",
+            "price_range": "Индивидуально",
+            "description": "Полноценные приложения внутри Telegram, работа с базами данных и API."
+        },
+        {
+            "name": "Техническая поддержка",
+            "price_range": "Обсуждается отдельно",
+            "description": "Поддержка, доработка и улучшение функционала после сдачи проекта."
+        }
+    ]
+    services_collection.insert_many(initial_services)
+    print("Database initialized with updated services.")
 
 def get_services_context():
     """Fetches services and returns a string formatted for the LLM system prompt."""
     db = get_db()
     services = db["services"].find()
 
-    text = "Список услуг и примерные цены:\n"
+    text = "Информация о ценах и услугах:\n"
+    text += "Мы предлагаем разработку Telegram-ботов по ценам в среднем в 2 раза ниже рыночных.\n\n"
+
+    text += "**Прайс-лист (ориентировочный):**\n"
     for s in services:
-        text += f"- {s['name']}: {s['price_range']}. ({s['description']})\n"
+        text += f"- {s['name']}: {s['price_range']}. {s['description']}\n"
+
+    text += "\n**Важно знать:**\n"
+    text += "- **Индивидуальный подход:** Чем интереснее задача, тем гибче цена. Цены ориентировочные и зависят от ваших 'хотелок'.\n"
+    text += "- **Хостинг и Ключи:** Мы не продаем хостинг и ключи, но **бесплатно** поможем найти самые выгодные (или бесплатные) варианты и настроить работу 24/7.\n"
+    text += "- **Связь:** По сложным вопросам бот перенаправит вас к разработчику (@Lotargo).\n"
 
     return text
 
